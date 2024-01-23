@@ -52,14 +52,14 @@ def main(args):
         labels = node_dict['label'][node_dict['train_mask']]
     train_mask = node_dict['train_mask']
     part_train = train_mask.int().sum().item()
-    feat = node_dict['feat']
+    feat = node_dict['feat'] # inner node的feat
     if args.use_cache:
         if args.cache_size == 0:
             args.cache_size = int((g.num_nodes('_U') - num_in)*args.cache_rate)
     ctx.buffer.init_buffer(g, feat, num_in, g.num_nodes('_U'), boundary, recv_shape, layer_size[:args.n_layers-args.n_linear], 
                         use_sample = args.use_sample,sample_rate=args.sample_rate, sample_method = args.sample_method, recompute_every = args.recompute_every,
                         use_async=args.use_async, stale_t=args.async_step, use_cache=args.use_cache, cache_size=args.cache_size, cache_policy=args.cache_policy,
-                        backend=args.backend)  
+                        backend=args.backend, es=args.es)  
     torch.manual_seed(args.seed) # necessary! Otherwise, the model parameters initialized on different GPUs will be different
     model = create_model(layer_size, n_train, args)
     model.cuda()
@@ -260,6 +260,10 @@ if __name__ == "__main__":
     parser.add_argument("--cache-rate", "--cache_rate", type=float, default=0.1 , help="Rate of boundary nodes to cache")
     parser.add_argument("--cache-size", "--cache_size", type=int, default=0 , help="Number of boundary nodes to cache")
     parser.add_argument("--cache-policy", "--cache_policy", choices=['random', 'degree', 'vr'], default='random', help="Cache policy")
+    # embedding sample
+    parser.add_argument("--use-es", "--use_es", action='store_true', help="Whether to use embdding sampling")
+    parser.add_argument("--lam", type=float, default=0.1, help="The weighting factor for the regularization")
+    parser.add_argument("--sigma", type=float, default=0.5, help="Standard deviation in the Gaussian distribution")
     args = parser.parse_args()
     # Initialize the distributed environment
     os.environ['MASTER_ADDR'] = args.master_addr #rank = 0 的process所在的machine的ip

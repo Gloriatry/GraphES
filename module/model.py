@@ -6,12 +6,16 @@ from helper import context as ctx
 
 class GNNBase(nn.Module):
 
-    def __init__(self, layer_size, activation, dropout=0.5, norm='layer', n_linear=0):
+    def __init__(self, layer_size, activation, dropout=0.5, norm='layer', n_linear=0,
+                 es=False, lam=0.1, sigma=0.5):
         super(GNNBase, self).__init__()
         self.n_layers = len(layer_size) - 1
         self.layers = nn.ModuleList()
         self.activation = activation
         self.n_linear = n_linear
+        self.es = es
+        self.lam = lam
+        self.sigma = sigma
 
         if norm is None:
             self.use_norm = False
@@ -22,10 +26,13 @@ class GNNBase(nn.Module):
 
 class GraphSAGE(GNNBase):
 
-    def __init__(self, layer_size, activation, dropout=0.5, norm='layer', train_size=None, n_linear=0):
-        super(GraphSAGE, self).__init__(layer_size, activation, dropout, norm, n_linear)
-        for i in range(self.n_layers):
+    def __init__(self, layer_size, activation, dropout=0.5, norm='layer', train_size=None, n_linear=0,
+                 es=False, lam=0.1, sigma=0.5):
+        super(GraphSAGE, self).__init__(layer_size, activation, dropout, norm, n_linear, es, lam, sigma)
+        for i in range(self.n_layers):  
             if i < self.n_layers - self.n_linear:# 前n_layers - n_linear层: GraphSAGELayer层
+                if self.es:
+                    self.layers.append(EmbeddingSelector(layer_size[i], self.sigma))
                 self.layers.append(GraphSAGELayer(layer_size[i], layer_size[i + 1]))
             else:#后n_linear层:Linear层
                 self.layers.append(nn.Linear(layer_size[i], layer_size[i + 1]))
@@ -38,14 +45,28 @@ class GraphSAGE(GNNBase):
     def forward(self, g, feat, in_deg=None):
         h = feat
         for i in range(self.n_layers):
-            if i < self.n_layers - self.n_linear:
-                if self.training:
-                    h = ctx.buffer.update(i, h)
-                h = self.dropout(h)
-                h = self.layers[i](g, h, in_deg)
+            if self.es:
+                if i < self.n_layers - self.n_linear:
+                    h = self.layers[2*i](h)
+                    # TODO: 生成mask
+                    # 思路是本地的inner node的h是直接不变，传的是经过了置0的
+                    # 1.23思路是直接将h中为0的不传，依据这个生成mask
+                    if self.training:
+                        h = ctx.buffer.update(i, h)
+                    h = self.dropout(h)
+                    h = self.layers[2*i+1](g, h, in_deg)
+                else:
+                    h = self.dropout(h)
+                    h = self.layers[self.n_layers-self.n_linear+i](h)
             else:
-                h = self.dropout(h)
-                h = self.layers[i](h)
+                if i < self.n_layers - self.n_linear:
+                    if self.training:
+                        h = ctx.buffer.update(i, h) # 输入的h维度是inner node，输出的维度是g中所有节点
+                    h = self.dropout(h)
+                    h = self.layers[i](g, h, in_deg) # 输入的是g中所有节点，输出是inner node
+                else:
+                    h = self.dropout(h)
+                    h = self.layers[i](h)
 
             if i < self.n_layers - 1:
                 if self.use_norm:

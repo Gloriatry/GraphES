@@ -226,7 +226,8 @@ def move_train_first(graph, node_dict, boundary):
 def create_model(layer_size, n_train, args):
     if args.model == 'graphsage':
         return GraphSAGE(layer_size, F.relu, norm=args.norm, dropout=args.dropout,
-                         n_linear=args.n_linear, train_size=n_train)
+                         n_linear=args.n_linear, train_size=n_train,
+                         es=args.use_es, lam=args.lam, sigma=args.sigma)
     else:
         raise NotImplementedError
 
