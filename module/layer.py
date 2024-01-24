@@ -101,11 +101,7 @@ class EmbeddingSelector(nn.Module):
         return new_x
     
     def hard_sigmoid(self, x):
-        return torch.clamp(x+0.5, 0.0, 1.0)
-
-    def regularizer(self, x):
-        ''' Gaussian CDF. '''
-        return 0.5 * (1 + torch.erf(x / math.sqrt(2))) 
+        return torch.clamp(x+0.5, 0.0, 1.0) 
 
     def _apply(self, fn):
         super(EmbeddingSelector, self)._apply(fn)

@@ -59,7 +59,7 @@ def main(args):
     ctx.buffer.init_buffer(g, feat, num_in, g.num_nodes('_U'), boundary, recv_shape, layer_size[:args.n_layers-args.n_linear], 
                         use_sample = args.use_sample,sample_rate=args.sample_rate, sample_method = args.sample_method, recompute_every = args.recompute_every,
                         use_async=args.use_async, stale_t=args.async_step, use_cache=args.use_cache, cache_size=args.cache_size, cache_policy=args.cache_policy,
-                        backend=args.backend, es=args.es)  
+                        backend=args.backend, es=args.use_es)  
     torch.manual_seed(args.seed) # necessary! Otherwise, the model parameters initialized on different GPUs will be different
     model = create_model(layer_size, n_train, args)
     model.cuda()
@@ -135,7 +135,7 @@ def main(args):
             #     ctx.buffer.wait()
             #     commu_time = time.time() - tc
             # # add at 7.24
-            ctx.buffer.setCommuInfo()  # ？？
+            ctx.buffer.setCommuInfo()  
             Q.put((sg, in_deg))
             if epoch <= args.n_epochs - args.async_step:
                 sample_thread = sample_pool.apply_async(ctx.buffer.sampleNodes,args=(g,epoch,),error_callback=lambda x:print('sampleNodes error!!!'))
@@ -144,13 +144,14 @@ def main(args):
         
         model.train()
         if args.model == 'graphsage':
-            logits = model(tg, feat, in_deg)
+            logits, reg_loss = model(tg, feat, in_deg)
         else:
             raise Exception
         if args.inductive:
             loss = loss_fcn(logits, labels)
         else:
             loss = loss_fcn(logits[train_mask], labels)
+        loss += args.lam * reg_loss  # args.use_es为False时,reg_loss为0,不影响
         del logits
         optimizer.zero_grad(set_to_none=True)
         loss.backward()

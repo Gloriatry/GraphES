@@ -43,6 +43,8 @@ class GraphSAGE(GNNBase):
                     self.norm.append(SyncBatchNorm(layer_size[i + 1], train_size))
 
     def forward(self, g, feat, in_deg=None):
+        # 为选择embedding引入的正则项
+        reg_loss = 0
         h = feat
         for i in range(self.n_layers):
             if self.es:
@@ -51,10 +53,14 @@ class GraphSAGE(GNNBase):
                     # TODO: 生成mask
                     # 思路是本地的inner node的h是直接不变，传的是经过了置0的
                     # 1.23思路是直接将h中为0的不传，依据这个生成mask
+                    # TODO 这里将mask传给buffer中的一个函数，该函数生成embedding idx并resize
                     if self.training:
+                        mask = self.layers[2*i].mu
+                        ctx.buffer.setEmbedInfo(mask, i)
                         h = ctx.buffer.update(i, h)
                     h = self.dropout(h)
                     h = self.layers[2*i+1](g, h, in_deg)
+                    reg_loss += torch.mean(self.regularizer((self.layers[2*i].mu + 0.5)/self.sigma))
                 else:
                     h = self.dropout(h)
                     h = self.layers[self.n_layers-self.n_linear+i](h)
@@ -72,6 +78,12 @@ class GraphSAGE(GNNBase):
                 if self.use_norm:
                     h = self.norm[i](h)
                 h = self.activation(h)
-
-        return h
+        if self.training:
+            return h, reg_loss
+        else:
+            return h
+    
+    def regularizer(self, x):
+        ''' Gaussian CDF. '''
+        return 0.5 * (1 + torch.erf(x / math.sqrt(2)))
     
