@@ -41,7 +41,7 @@ class GraphSAGE(GNNBase):
                     self.norm.append(nn.LayerNorm(layer_size[i + 1], elementwise_affine=True))
                 elif norm == 'batch':
                     self.norm.append(SyncBatchNorm(layer_size[i + 1], train_size))
-
+    ###############改动###############
     def forward(self, g, feat, in_deg=None):
         # 为选择embedding引入的正则项
         reg_loss = 0
@@ -53,11 +53,11 @@ class GraphSAGE(GNNBase):
                     # TODO: 生成mask
                     # 思路是本地的inner node的h是直接不变，传的是经过了置0的
                     # 1.23思路是直接将h中为0的不传，依据这个生成mask
-                    # TODO 这里将mask传给buffer中的一个函数，该函数生成embedding idx并resize
                     if self.training:
-                        mask = self.layers[2*i].mu
-                        ctx.buffer.setEmbedInfo(mask, i)
-                        h = ctx.buffer.update(i, h)
+                        mask = self.layers[2*i].mu > 0
+                        # setEmbedInfo函数生成embedding idx并resize recv_cpu,recv_gpu,send_cpu这些变量
+                        #ctx.buffer.setEmbedInfo(mask, i)
+                        h = ctx.buffer.update(i, h, mask)
                     h = self.dropout(h)
                     h = self.layers[2*i+1](g, h, in_deg)
                     reg_loss += torch.mean(self.regularizer((self.layers[2*i].mu + 0.5)/self.sigma))
@@ -67,7 +67,7 @@ class GraphSAGE(GNNBase):
             else:
                 if i < self.n_layers - self.n_linear:
                     if self.training:
-                        h = ctx.buffer.update(i, h) # 输入的h维度是inner node，输出的维度是g中所有节点
+                        h = ctx.buffer.update(i, h, None) # 输入的h维度是inner node，输出的维度是g中所有节点
                     h = self.dropout(h)
                     h = self.layers[i](g, h, in_deg) # 输入的是g中所有节点，输出是inner node
                 else:

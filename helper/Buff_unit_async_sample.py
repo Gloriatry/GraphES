@@ -227,7 +227,7 @@ class Buff_Unit(object):
                 self.miss_recv_idx[i].copy_(self.miss_recv_idx_temp[i])
                 self.cache_idx[i].copy_(self.cache_idx_temp[i])
         self.__resizeBuffUnit(self.send_num, self.recv_num, self.miss_send_num, self.miss_recv_num, self._n_layers, self._layer_size, self._rank, self._size, self._backend)
-    
+    ###############改动###############
     def setEmbedInfo(self, mask, layer):
         rank, size = dist.get_rank(), dist.get_world_size()
         recv_embed_idx_cpu = [None] * size
@@ -241,7 +241,6 @@ class Buff_Unit(object):
             self.send_embed_idx[layer][i] = torch.nonzero(mask, as_tuple=True)[0]
             send_embed_idx_cpu[i] = self.send_embed_idx[layer][i].to('cpu')
 
-        # TODO temp是否有必要加,recv_embed_idx_cpu是否会覆盖
         # 进程之间互相传embed index
         for i in range(1, size):
             left = (rank - i + size) % size
@@ -261,7 +260,6 @@ class Buff_Unit(object):
                 continue
             self.recv_embed_idx[layer][i].copy_(recv_embed_idx_cpu[i])
         
-        # 构建接收数量数组，后面传给resizeBuffUnit函数
         num_embed_recv = [None] * size
         for i in range(size):
             if i == rank:
@@ -285,7 +283,7 @@ class Buff_Unit(object):
 
     def __importanceSample(self, graph):
         raise NotImplementedError
-    
+    ###############改动###############
     def __initEmbedIdx(self, n_layers, layer_size, rank, size):
         for i in range(n_layers):
             tmp = []
@@ -318,9 +316,11 @@ class Buff_Unit(object):
                         tmp4.append(torch.zeros(s1))
                 self.f_send_cpu[i] = tmp1
                 self.f_recv_cpu[i] = tmp3
-                if i > 0:
-                    self.g_send_cpu[i] = tmp2
-                    self.g_recv_cpu[i] = tmp4
+                # if i > 0:
+                #     self.g_send_cpu[i] = tmp2
+                #     self.g_recv_cpu[i] = tmp4
+                self.g_send_cpu[i] = tmp2
+                self.g_recv_cpu[i] = tmp4
         # f/g recv in gpu
         for i in range(n_layers):
             tmp1, tmp2 = [], []
@@ -334,8 +334,9 @@ class Buff_Unit(object):
                     tmp1.append(torch.zeros(s1, device='cuda'))
                     tmp2.append(torch.zeros(s2, device='cuda'))
             self.f_recv_gpu[i] = tmp1
-            if i > 0:
-                self.g_recv_gpu[i] = tmp2
+            # if i > 0:
+            #     self.g_recv_gpu[i] = tmp2
+            self.g_recv_gpu[i] = tmp2
     def __resizeBuffUnit(self, send_num, recv_num, miss_send_num, miss_recv_num, n_layers, layer_size, rank, size, backend):
         for i in range(n_layers):
             if i == 0 and self._use_cache:
@@ -352,10 +353,13 @@ class Buff_Unit(object):
                     self.f_send_cpu[i][j].resize_([send_num[j],layer_size[i]])
                     self.f_recv_cpu[i][j].resize_([recv_num[j],layer_size[i]])
                     self.f_recv_gpu[i][j].resize_([recv_num[j],layer_size[i]])
-                    if i > 0:
-                        self.g_send_cpu[i][j].resize_([recv_num[j],layer_size[i]])
-                        self.g_recv_cpu[i][j].resize_([send_num[j],layer_size[i]])
-                        self.g_recv_gpu[i][j].resize_([send_num[j],layer_size[i]])
+                    # if i > 0:
+                    #     self.g_send_cpu[i][j].resize_([recv_num[j],layer_size[i]])
+                    #     self.g_recv_cpu[i][j].resize_([send_num[j],layer_size[i]])
+                    #     self.g_recv_gpu[i][j].resize_([send_num[j],layer_size[i]])
+                    self.g_send_cpu[i][j].resize_([recv_num[j],layer_size[i]])
+                    self.g_recv_cpu[i][j].resize_([send_num[j],layer_size[i]])
+                    self.g_recv_gpu[i][j].resize_([send_num[j],layer_size[i]])
 
     # communicating idx Tag
     def get_send_idx(self):
