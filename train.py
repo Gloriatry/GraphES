@@ -223,8 +223,8 @@ if __name__ == "__main__":
     parser.add_argument("--backend",type=str, default='gloo', help="enter the backend")
     parser.add_argument("--rank",type=int, default=0, help="rank of this process")
     parser.add_argument("--world_size","--world-size", type=int, default=4, help="world size of the group")
-    parser.add_argument("--master_addr",type=str, default='11.11.11.13', help="enter the backend")
-    parser.add_argument("--master_port",type=str, default='4321', help="enter the backend")
+    parser.add_argument("--master_addr",type=str, default='192.168.124.104', help="enter the backend")
+    parser.add_argument("--master_port",type=str, default='6668', help="enter the backend")
     parser.add_argument("--nic_name",type=str, default='', help="the nic name to communicate")
     parser.add_argument("--device",type=int, default=0, help="training device")
     #dataset
