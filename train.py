@@ -144,7 +144,7 @@ def main(args):
         
         model.train()
         if args.model == 'graphsage':
-            logits, reg_loss = model(tg, feat, in_deg)
+            logits, reg_loss = model(tg, feat, in_deg)  # in_deg和feat都是针对inner node
         else:
             raise Exception
         if args.inductive:

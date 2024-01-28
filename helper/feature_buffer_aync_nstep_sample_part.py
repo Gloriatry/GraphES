@@ -33,11 +33,10 @@ class Buffer(object):
         self._backend = None
         self._pl, self._pr = [], []
         self._comm_stream = []
-        self.es = None
 
     def __init_pl_pr(self):
         self._pl, self._pr = [], []
-        tot = self._num_in  # inner nodes 的个数
+        tot = self._num_in
         for s in self._recv_shape:
             if s is None:
                 self._pl.append(None)
@@ -49,7 +48,7 @@ class Buffer(object):
 
     def init_buffer(self, graph, feat, num_in, num_all, boundary, f_recv_shape, layer_size, 
                     use_sample = False, sample_rate =1, sample_method = 'random', recompute_every = 100,
-                    use_async=False, stale_t= 1, use_cache = False, cache_size = 0, cache_policy = 'random', backend='gloo', es=False):
+                    use_async=False, stale_t= 1, use_cache = False, cache_size = 0, cache_policy = 'random', backend='gloo'):
         rank, size = dist.get_rank(), dist.get_world_size()
         self._rank = rank
         self._size = size
@@ -70,7 +69,6 @@ class Buffer(object):
         self._stale_t = stale_t # indicate how many step async used
         self._step = 0 #indicate which step in
         self._backend = backend
-        self.es = es
         if use_sample:
             self.sample_matrix = torch.zeros([graph.num_edges()],device='cuda') + self._sample_rate
             self.sample_matrix_temp = torch.zeros([graph.num_edges()],device='cuda') + self._sample_rate
@@ -99,17 +97,15 @@ class Buffer(object):
                     tmp1.append(torch.zeros(s1, device='cuda', requires_grad=False))
                     tmp2.append(torch.zeros(s2, device='cuda', requires_grad=False))
             self._embed_recv[i] = tmp1
-            # if i > 0:
-            #     self._grad_recv[i] = tmp2
-            self._grad_recv[i] = tmp2
+            if i > 0:
+                self._grad_recv[i] = tmp2
         self.__init_pl_pr()  # 
         if use_cache:
             self.cache = Cache(f_recv_shape, self._layer_size[0], cache_size=cache_size, rank=rank ,size=size, cache_policy=cache_policy)
             self.cache.initCache(feat, self._boundary, total_recv = self._num_all-self._num_in, pl=self._pl, pr = self._pr, plrdel = self._num_in, g=graph)
         if use_async:
             for i in range(self._stale_t):
-                self._buff.append(Buff_Unit(self._send_shape, self._recv_shape, self._n_layers, self._layer_size, rank, size, backend,
-                                            use_sample=use_sample, use_cache=use_cache, cache=self.cache, es=self.es))
+                self._buff.append(Buff_Unit(self._send_shape, self._recv_shape, self._n_layers, self._layer_size, rank, size, backend, use_sample=use_sample, use_cache=use_cache, cache=self.cache))
                 self._pool = ThreadPool(processes=2*self._n_layers*self._stale_t)
         else:
             self._buff.append(Buff_Unit(self._send_shape, self._recv_shape, self._n_layers, self._layer_size, rank, size, backend, use_sample=use_sample, use_cache=use_cache, cache=self.cache))
@@ -191,12 +187,6 @@ class Buffer(object):
     def setCommuInfo(self):
         if self._use_sample:
             self._buff[self._step].setCommuInfo()
-    
-    # def setEmbedInfo(self, mask, layer):
-    #     '''
-    #     进程之间传各自选择的embed_idx,并resize recv_gpu、recv_cpu、send_cpu这些变量
-    #     '''
-    #     self._buff[self._step].setEmbedInfo(mask, layer)
 
     def initSampleNodes(self, original_graph, epoch):
         return self._buff[self._step].sampleNodes(original_graph,self.sample_matrix, self._sample_method, epoch, self._recompute_every, self._stale_t*int(self._use_async), self._pl, self._pr, self.cache)
@@ -204,8 +194,8 @@ class Buffer(object):
     def sampleNodes(self, original_graph, epoch):
         next_step = (self._step + 1) % self._stale_t
         return self._buff[next_step].sampleNodes(original_graph, self.sample_matrix, self._sample_method, epoch, self._recompute_every, self._stale_t*int(self._use_async), self._pl, self._pr, self.cache)
-    ###############改动###############
-    def __feat_fusion(self, layer, step):  # 这里的step是self._step
+
+    def __feat_fusion(self, layer, step):
         rank, size = dist.get_rank(), dist.get_world_size()
         for i in range(size):
             if i != rank:
@@ -213,10 +203,7 @@ class Buffer(object):
                     self._embed_recv[layer][i][self._buff[step].get_hit_recv_idx()[i]] = self.cache.fetch_from_cache(self._buff[step].get_cache_idx(),i)
                     self._embed_recv[layer][i][self._buff[step].get_miss_recv_idx()[i]] = self._buff[step].get_f_recv_gpu(layer)[i]
                 else:
-                    # 将embed_recv置0,相当于将embedding中没有选中的维度置0
-                    zero_tensor = torch.zeros(torch.Size([self._buff[step].get_recv_idx()[i].shape[0], self._embed_recv[layer][i].shape[1]]), device='cuda')
-                    self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]] = zero_tensor
-                    self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]][:, self._buff[step].get_recv_embed_idx(layer)[i]] = self._buff[step].get_f_recv_gpu(layer)[i]
+                    self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]] = self._buff[step].get_f_recv_gpu(layer)[i]
 
     def __feat_concat(self, layer, feat):
         rank, size = dist.get_rank(), dist.get_world_size()
@@ -226,12 +213,12 @@ class Buffer(object):
                 tmp.append(self._embed_recv[layer][i])
         return torch.cat(tmp)
 
-    def update(self, layer, feat, mask):  # 这个feat代表的是h，也就是embedding
+    def update(self, layer, feat):
         torch.cuda.current_stream().synchronize()
         if self._use_async is False:
             with comm_timer.timer(f'epoch:{self._epoch} forward_{layer}'): # 记录前向传播的时间
-                self.__feat_transfer(self._epoch, self._step, layer, feat, mask) # 传embedding
-                torch.cuda.current_stream().wait_event(self._buff[self._step].get_f_cuda_event(layer)) # 确保embedding传输已完成
+                self.__feat_transfer(self._epoch, self._step, layer, feat) # 传特征
+                torch.cuda.current_stream().wait_event(self._buff[self._step].get_f_cuda_event(layer)) # 确保特征传输已完成
             # self.__feat_fusion(layer, self._step) #TODO in commu?
             self._embed_buf[layer] = self.__feat_concat(layer, feat) # 将传输的特征与当前层的特征连接起来
             if self._embed_buf[layer].requires_grad: # 
@@ -244,18 +231,14 @@ class Buffer(object):
                     torch.cuda.current_stream().wait_event(self._buff[self._step].get_f_cuda_event(layer))
                     self._buff[self._step].get_f_cpu_event(layer).clear()  # Event.wait() will block
                 # self.__feat_fusion(layer, self._step) # TODO in commu?
-            self._embed_buf[layer] = self.__feat_concat(layer, feat)  
-            # 拼接本地节点和boundary的embedding，boundary的embedding在_embed_recv中
-            self._pool.apply_async(self.__feat_transfer, args=(self._epoch, self._step, layer, feat, mask))
+            self._embed_buf[layer] = self.__feat_concat(layer, feat)
+            self._pool.apply_async(self.__feat_transfer, args=(self._epoch, self._step, layer, feat))
             if self._embed_buf[layer].requires_grad and layer > 0 :
                 self._embed_buf[layer].register_hook(self.__grad_hook(self._epoch, layer, self._step))
             return self._embed_buf[layer]
-    ###############改动###############
+
     @torch.no_grad()
-    def __gloo_all_to_all(self, send_gpu, recv_gpu, send_cpu, recv_cpu, 
-                          selected_send_idx, selected_recv_idx, 
-                          selected_send_embed_idx, selected_recv_embed_idx, 
-                          step, tag, forward = True):
+    def __gloo_all_to_all(self, send_gpu, recv_gpu, send_cpu, recv_cpu, selected_send_idx, selected_recv_idx, step, tag, forward = True):
         rank, size = dist.get_rank(), dist.get_world_size()
         req1, req2 = [], queue.Queue()
         self._comm_stream[step].wait_stream(torch.cuda.current_stream())
@@ -266,11 +249,9 @@ class Buffer(object):
                 r2 = dist.irecv(recv_cpu[left], tag=tag, src=left)
                 req2.put((r2, left))
                 # prepare send tensor
-                if forward:
-                    # 前向传播传boundary中的send_idx部分
-                    send_cpu[right].copy_(send_gpu[self._boundary[right]][selected_send_idx[right]][:, selected_send_embed_idx[right]])
+                if forward:     
+                    send_cpu[right].copy_(send_gpu[self._boundary[right]][selected_send_idx[right]])
                 else:
-                    # 反向传播传recv_idx部分
                     send_cpu[right].copy_(send_gpu[self._pl[right]:self._pr[right]][selected_recv_idx[right]]) # 这里传的是什么？
                 r1 = dist.isend(send_cpu[right], tag=tag, dst=right)
                 req1.append(r1)
@@ -287,29 +268,22 @@ class Buffer(object):
             for r in req1:
                 r.wait()
 
-    ###############改动###############
-    def __feat_transfer(self, epoch, step, layer, feat, mask):
-        if self.es:
-            self._buff[step].setEmbedInfo(mask, layer)
+
+    def __feat_transfer(self, epoch, step, layer, feat):
         tag = TransferTag.FEAT_BEGIN + epoch * 2 * self._n_layers + layer
         if self._backend == 'gloo':
             # with torch.no_grad():
             if layer == 0 and self._use_cache:
                 self.__gloo_all_to_all(feat, self._buff[step].get_f_recv_gpu(layer), self._buff[step].get_f_send_cpu(layer), self._buff[step].get_f_recv_cpu(layer),
-                                        self._buff[step].get_miss_send_idx(), self._buff[step].get_miss_recv_idx(), 
-                                        self._buff[step].get_send_embed_idx(layer), self._buff[step].get_recv_embed_idx(layer),
-                                        step, tag, forward=True)
+                                        self._buff[step].get_miss_send_idx(), self._buff[step].get_miss_recv_idx(), step, tag, forward=True)
             else:
-                # 
                 # send_gpu, recv_gpu, send_cpu, recv_cpu
                 self.__gloo_all_to_all(feat, self._buff[step].get_f_recv_gpu(layer), self._buff[step].get_f_send_cpu(layer), self._buff[step].get_f_recv_cpu(layer),
-                                        self._buff[step].get_send_idx(), self._buff[step].get_recv_idx(), 
-                                        self._buff[step].get_send_embed_idx(layer), self._buff[step].get_recv_embed_idx(layer), 
-                                        step, tag, forward=True)
+                                        self._buff[step].get_send_idx(), self._buff[step].get_recv_idx(), step, tag, forward=True)
             self._buff[step].get_f_cuda_event(layer).record(self._comm_stream[step]) # 在通信流上记录CUDA事件，以便后续等待
         else:
             raise NotImplementedError
-        self.__feat_fusion(layer, step)  # 将接收到的embedding存放在self._embed_recv中
+        self.__feat_fusion(layer, self._step)  # 将接收到的embedding存放在self._embed_recv中
         self._buff[step].get_f_cpu_event(layer).set() # Event.wait() will not block
         #add at 7.24
         self._buff[step].update_f_event[layer].set()
@@ -351,12 +325,12 @@ class Buffer(object):
                 self._pool.apply_async(self.__grad_transfer, args=(epoch, step, layer, grad), error_callback=lambda x:print('error!!!'))
                 return grad
         return fn
-    
+
     def __grad_transfer(self, epoch, step, layer, grad):
         tag = TransferTag.FEAT_BEGIN + epoch * 2 * self._n_layers + layer + self._n_layers
         if self._backend == 'gloo':
             self.__gloo_all_to_all(grad, self._buff[step].get_g_recv_gpu(layer), self._buff[step].get_g_send_cpu(layer), self._buff[step].get_g_recv_cpu(layer),
-                                    self._buff[step].get_send_idx(), self._buff[step].get_recv_idx(), None, None, step, tag, forward=False)
+                                    self._buff[step].get_send_idx(), self._buff[step].get_recv_idx(), step, tag, forward=False)
             self._buff[step].get_b_cuda_event(layer).record(self._comm_stream[step])
         else:
             raise NotImplementedError

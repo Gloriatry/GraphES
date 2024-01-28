@@ -7,15 +7,13 @@ from helper.transfer_tag import *
 
 
 class Buff_Unit(object):
-    def __init__(self, send_num_tot, recv_num_tot, n_layers, layer_size, rank, size, backend, use_sample, use_cache, cache = None,
-                 es=False) -> None:
+    def __init__(self, send_num_tot, recv_num_tot, n_layers, layer_size, rank, size, backend, use_sample, use_cache, cache = None) -> None:
         super(Buff_Unit, self).__init__()
         self._n_layers = n_layers
         self._layer_size = layer_size
         self._rank = rank
         self._size = size
         self._use_cache = use_cache
-        self.es = es
         self._backend = backend
         self._send_num_tot = send_num_tot
         self._recv_num_tot = recv_num_tot
@@ -49,9 +47,6 @@ class Buff_Unit(object):
         # select nodes index
         self.send_idx, self.recv_idx = [], []
         self.send_idx, self.recv_idx = [None] * size, [None] * size
-        # embedding index
-        self.send_embed_idx, self.recv_embed_idx = [], []
-        self.send_embed_idx, self.recv_embed_idx = [None] * n_layers, [None] * n_layers
         
         if use_cache:
             self.miss_send_idx, self.miss_recv_idx, self.hit_recv_idx,self.cache_idx = [], [], [], []
@@ -64,7 +59,6 @@ class Buff_Unit(object):
         self.miss_send_idx_temp, self.miss_recv_idx_temp, self.cache_idx_temp = [None] * size, [None] * size, [None] * size
         self.__initBuffUnit(send_num_tot, recv_num_tot, n_layers, layer_size, rank, size, backend)
         self.__initSenRecvIdx(send_num_tot, recv_num_tot, rank, size)
-        self.__initEmbedIdx(n_layers, layer_size, rank, size)
         if use_cache:
             self.__initCacheIdx(cache, layer_size)
     def __initSenRecvIdx(self, send_num_tot, recv_num_tot, rank, size):
@@ -126,7 +120,7 @@ class Buff_Unit(object):
         rank, size = dist.get_rank(), dist.get_world_size()
         
         # sample
-        sample_mask = torch.bernoulli(sample_matrix).bool()  # 二项分布，p为sample_matrix中对应值
+        sample_mask = torch.bernoulli(sample_matrix).bool()
 
         # relabel_nodes=False,will not remove the isolated nodes and won't relabel the incident nodes in the extracted subgraph.
         g = dgl.edge_subgraph(graph, sample_mask, relabel_nodes=False, store_ids=False, output_device='cuda')
@@ -146,13 +140,13 @@ class Buff_Unit(object):
             send_idx_cpu = [None] * size
             num_recv = [None] * size
 
-            g_outdeg = g.out_degrees(u='__ALL__', etype='_E')  # 返回对应节点的出度
+            g_outdeg = g.out_degrees(u='__ALL__', etype='_E')
             for i in range(size):
                 if i == rank:
                     continue
                 temp = g_outdeg[pl[i]:pr[i]]
-                num_recv[i] = temp.bool().sum().to('cpu')  # 该进程采样进程i中的节点个数
-                self.recv_idx_temp[i] = torch.nonzero(temp, as_tuple=True)[0]  # 出度不为0的节点，也就是被采样的节点
+                num_recv[i] = temp.bool().sum().to('cpu')
+                self.recv_idx_temp[i] = torch.nonzero(temp, as_tuple=True)[0]
                 recv_idx_cpu[i] = self.recv_idx_temp[i].to('cpu')
 
             # communicate for training
@@ -227,74 +221,9 @@ class Buff_Unit(object):
                 self.miss_recv_idx[i].copy_(self.miss_recv_idx_temp[i])
                 self.cache_idx[i].copy_(self.cache_idx_temp[i])
         self.__resizeBuffUnit(self.send_num, self.recv_num, self.miss_send_num, self.miss_recv_num, self._n_layers, self._layer_size, self._rank, self._size, self._backend)
-    ###############改动###############
-    def setEmbedInfo(self, mask, layer):
-        rank, size = dist.get_rank(), dist.get_world_size()
-        recv_embed_idx_cpu = [None] * size
-        send_embed_idx_cpu = [None] * size
-        num_embed_send = [None] * size
-
-        for i in range(size):
-            if i == rank:
-                continue
-            num_embed_send[i] = mask.bool().sum().to('cpu')
-            self.send_embed_idx[layer][i] = torch.nonzero(mask, as_tuple=True)[0]
-            send_embed_idx_cpu[i] = self.send_embed_idx[layer][i].to('cpu')
-
-        # 进程之间互相传embed index
-        for i in range(1, size):
-            left = (rank - i + size) % size
-            right = (rank + i) % size
-            num_embed_recv = torch.tensor([0])
-            req = dist.isend(num_embed_send[right], dst=right, tag=TransferTag.EMBED1)
-            dist.recv(num_embed_recv, src=left, tag=TransferTag.EMBED1)
-            recv_embed_idx_cpu[left] = torch.zeros(num_embed_recv, dtype=torch.long)
-            self.recv_embed_idx[layer][left] = torch.zeros(num_embed_recv, dtype=torch.long, device='cuda')
-            req.wait()
-            req = dist.isend(send_embed_idx_cpu[right], dst=right, tag=TransferTag.EMBED2)
-            dist.recv(recv_embed_idx_cpu[left], src=left, tag=TransferTag.EMBED2)
-            req.wait()
-        
-        for i in range(size):
-            if i == rank:
-                continue
-            self.recv_embed_idx[layer][i].copy_(recv_embed_idx_cpu[i])
-        
-        num_embed_recv = [None] * size
-        for i in range(size):
-            if i == rank:
-                continue
-            else:
-                num_embed_recv[i] = self.recv_embed_idx[layer][i].shape[0]
-        
-        # resize发送和接收变量
-        # TODO 节点采样和embed选择是对应的同一步吗
-        for i in range(size):
-            if i == rank:
-                continue
-            else:
-                node_num = self.f_send_cpu[layer][i].shape[0]
-                self.f_send_cpu[layer][i].resize_([node_num, num_embed_send[i]])
-                node_num = self.f_recv_cpu[layer][i].shape[0]
-                self.f_recv_cpu[layer][i].resize_([node_num, num_embed_recv[i]])
-                node_num = self.f_recv_gpu[layer][i].shape[0]
-                self.f_recv_gpu[layer][i].resize_([node_num, num_embed_recv[i]])
-
-
     def __importanceSample(self, graph):
         raise NotImplementedError
-    ###############改动###############
-    def __initEmbedIdx(self, n_layers, layer_size, rank, size):
-        for i in range(n_layers):
-            tmp = []
-            for j in range(size):
-                if j == rank:
-                    tmp.append(None)
-                else:
-                    tmp.append(torch.arange(layer_size[i], dtype=torch.long, device='cuda'))
-            self.send_embed_idx[i] = tmp
-            self.recv_embed_idx[i] = tmp
-
+    
     def __initBuffUnit(self, send_num_tot, recv_num_tot, n_layers, layer_size, rank, size, backend):
         # f/g  send/recv in cpu memory
         if backend == 'gloo':
@@ -316,11 +245,9 @@ class Buff_Unit(object):
                         tmp4.append(torch.zeros(s1))
                 self.f_send_cpu[i] = tmp1
                 self.f_recv_cpu[i] = tmp3
-                # if i > 0:
-                #     self.g_send_cpu[i] = tmp2
-                #     self.g_recv_cpu[i] = tmp4
-                self.g_send_cpu[i] = tmp2
-                self.g_recv_cpu[i] = tmp4
+                if i > 0:
+                    self.g_send_cpu[i] = tmp2
+                    self.g_recv_cpu[i] = tmp4
         # f/g recv in gpu
         for i in range(n_layers):
             tmp1, tmp2 = [], []
@@ -334,9 +261,8 @@ class Buff_Unit(object):
                     tmp1.append(torch.zeros(s1, device='cuda'))
                     tmp2.append(torch.zeros(s2, device='cuda'))
             self.f_recv_gpu[i] = tmp1
-            # if i > 0:
-            #     self.g_recv_gpu[i] = tmp2
-            self.g_recv_gpu[i] = tmp2
+            if i > 0:
+                self.g_recv_gpu[i] = tmp2
     def __resizeBuffUnit(self, send_num, recv_num, miss_send_num, miss_recv_num, n_layers, layer_size, rank, size, backend):
         for i in range(n_layers):
             if i == 0 and self._use_cache:
@@ -353,23 +279,16 @@ class Buff_Unit(object):
                     self.f_send_cpu[i][j].resize_([send_num[j],layer_size[i]])
                     self.f_recv_cpu[i][j].resize_([recv_num[j],layer_size[i]])
                     self.f_recv_gpu[i][j].resize_([recv_num[j],layer_size[i]])
-                    # if i > 0:
-                    #     self.g_send_cpu[i][j].resize_([recv_num[j],layer_size[i]])
-                    #     self.g_recv_cpu[i][j].resize_([send_num[j],layer_size[i]])
-                    #     self.g_recv_gpu[i][j].resize_([send_num[j],layer_size[i]])
-                    self.g_send_cpu[i][j].resize_([recv_num[j],layer_size[i]])
-                    self.g_recv_cpu[i][j].resize_([send_num[j],layer_size[i]])
-                    self.g_recv_gpu[i][j].resize_([send_num[j],layer_size[i]])
+                    if i > 0:
+                        self.g_send_cpu[i][j].resize_([recv_num[j],layer_size[i]])
+                        self.g_recv_cpu[i][j].resize_([send_num[j],layer_size[i]])
+                        self.g_recv_gpu[i][j].resize_([send_num[j],layer_size[i]])
 
     # communicating idx Tag
     def get_send_idx(self):
         return self.send_idx
     def get_recv_idx(self):
         return self.recv_idx
-    def get_send_embed_idx(self, layer):
-        return self.send_embed_idx[layer]
-    def get_recv_embed_idx(self, layer):
-        return self.recv_embed_idx[layer]
     def get_miss_send_idx(self):
         """get send idx after cache """
         return self.miss_send_idx
