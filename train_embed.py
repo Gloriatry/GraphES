@@ -7,6 +7,8 @@ from helper.utils import *
 from multiprocessing.pool import ThreadPool
 import copy
 import queue
+from tensorboardX import SummaryWriter
+import subprocess
 
 # %%   
 def main(args):
@@ -74,15 +76,23 @@ def main(args):
     eval_thread = None
     eval_pool = ThreadPool(processes=1)
 
+    if rank == 0:
+        writer = SummaryWriter(f'logs/{args.dataset}_es{args.use_es}_sigma{args.sigma}_lam{args.lam}_asyn{args.use_async}_step{args.async_step}_logs')
+    command = f"ifconfig enp5s0f1"
+
     tg = g
     del node_dict
     loss_rc = []
     test_accuray_rc= []
-    if result_file_name is not None :
-        with open(result_file_name, 'a+') as f:
-            f.write(str(args) + '\n')
+    # if result_file_name is not None :
+    #     with open(result_file_name, 'a+') as f:
+    #         f.write(str(args) + '\n')
 # %% training
-    for epoch in range(args.n_epochs): 
+    if not args.use_async:
+        recv_comm, send_comm = [], []
+    for epoch in range(args.n_epochs):
+        if not args.use_async:
+            result_before = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
         print(f"Epoch:{epoch}")
         t0 = time.time()
         # add at 7.24 在这个地方可以异步以model异步单位
@@ -112,22 +122,35 @@ def main(args):
         train_dur.append(time.time() - t0)
         comm_dur.append(ctx.comm_timer.tot_time()+commu_time)
         reduce_dur.append(reduce_time)
+        if not args.use_async:
+            time.sleep(1)
+            result_after = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
+            rx_before = int(result_before.decode().split('bytes')[1].split('(')[0])
+            tx_before = int(result_before.decode().split('bytes')[2].split('(')[0])
+            rx_after = int(result_after.decode().split('bytes')[1].split('(')[0])
+            tx_after = int(result_after.decode().split('bytes')[2].split('(')[0])
+            rx_diff = rx_after - rx_before
+            tx_diff = tx_after - tx_before
+            recv_comm.append(rx_diff)
+            send_comm.append(tx_diff)
         if (epoch + 1) % 10 == 0:
             print("Process {:03d} | Epoch {:05d} | Time(s) {:.4f} | Comm(s) {:.4f} | Reduce(s) {:.4f} | Loss {:.4f}".format(
                   rank, epoch, np.average(train_dur[-10:]), np.average(comm_dur[-10:]), np.average(reduce_dur[-10:]), loss.item() / part_train) )
             loss_rc += [round(loss.item() / part_train,4)]
         ctx.comm_timer.clear()
         del loss
-        
+
         if rank == 0 and args.eval and (epoch + 1) % args.log_every == 0:
             model_copy = copy.deepcopy(model)
             if not args.inductive:
-                eval_thread = eval_pool.apply_async(evaluate_trans, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, test_accuray_rc, result_file_name))
+                eval_thread = eval_pool.apply_async(evaluate_trans, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, test_accuray_rc, epoch, writer, result_file_name))
             else:
-                eval_thread = eval_pool.apply_async(evaluate_induc, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, 'val', test_accuray_rc, result_file_name))
+                eval_thread = eval_pool.apply_async(evaluate_induc, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, 'val', test_accuray_rc, epoch, writer, result_file_name))
     if eval_thread:
         eval_thread.get()
     reocord_time(args, train_dur, comm_dur, reduce_dur, loss_rc, test_accuray_rc)
+    if not args.use_async:
+        print("recv_mean:", int(sum(recv_comm)/len(recv_comm)), "send_mean:", int(sum(send_comm)/len(send_comm)))
     # if args.inductive:
     #     evaluate_induc('Final Test Result', model, test_g, 'test')
     print("finish!\n")
