@@ -276,7 +276,7 @@ def calc_acc(logits, labels):
         return f1_score(labels, logits > 0, average='micro')
 
 @torch.no_grad()           
-def evaluate_induc(args, name, model, g, mode, test_accuray_rc, result_file_name=None):
+def evaluate_induc(args, name, model, g, mode, test_accuray_rc, epoch, writer, result_file_name=None):
 
     """
     mode: 'val' or 'test'
@@ -292,6 +292,7 @@ def evaluate_induc(args, name, model, g, mode, test_accuray_rc, result_file_name
     acc = calc_acc(logits, labels)
     test_accuray_rc.append(acc)
     buf = "{:s} | Accuracy {:.2%}".format(name, acc)
+    writer.add_scalar('Test Accuracy', acc.item(), epoch)
     if result_file_name is not None:
         with open(result_file_name, 'a+') as f:
             f.write(buf + '\n')
@@ -301,7 +302,7 @@ def evaluate_induc(args, name, model, g, mode, test_accuray_rc, result_file_name
     return model, acc
 
 @torch.no_grad()
-def evaluate_trans(args, name, model, g, test_accuray_rc, result_file_name=None):
+def evaluate_trans(args, name, model, g, test_accuray_rc, epoch, writer, result_file_name=None):
     model.eval()
     model.cpu()
     feat, labels = g.ndata['feat'], g.ndata['label']
@@ -313,6 +314,7 @@ def evaluate_trans(args, name, model, g, test_accuray_rc, result_file_name=None)
     test_acc = calc_acc(test_logits, test_labels)
     test_accuray_rc.append(test_acc)
     buf = "{:s} | Validation Accuracy {:.2%} | Test Accuracy {:.2%}".format(name, val_acc, test_acc)
+    writer.add_scalar('Test Accuracy', test_acc.item(), epoch)
     if result_file_name is not None:
         with open(result_file_name, 'a+') as f:
             f.write(buf + '\n')
