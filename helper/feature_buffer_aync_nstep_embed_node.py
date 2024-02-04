@@ -134,8 +134,8 @@ class Buffer(object):
             if i != rank:
                 # 将embed_recv置0,相当于将embedding中没有选中的维度置0
                 # change 2.1 -
-                # zero_tensor = torch.zeros(torch.Size([self._buff[step].get_recv_idx()[i].shape[0], self._embed_recv[layer][i].shape[1]]), device='cuda')
-                # self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]] = zero_tensor
+                zero_tensor = torch.zeros(torch.Size([self._buff[step].get_recv_idx()[i].shape[0], self._embed_recv[layer][i].shape[1]]), device='cuda')
+                self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]] = zero_tensor
                 self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]][:, self._buff[step].get_recv_embed_idx(layer)[i]] = self._buff[step].get_f_recv_gpu(layer)[i]
                 # add 2.1 + 
                 

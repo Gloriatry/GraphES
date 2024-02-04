@@ -276,7 +276,7 @@ def calc_acc(logits, labels):
         return f1_score(labels, logits > 0, average='micro')
 
 @torch.no_grad()           
-def evaluate_induc(args, name, model, g, mode, test_accuray_rc, epoch, writer, result_file_name=None):
+def evaluate_induc(args, name, model, g, mode, test_accuray_rc, time, writer, epoch, result_file_name=None):
 
     """
     mode: 'val' or 'test'
@@ -292,17 +292,17 @@ def evaluate_induc(args, name, model, g, mode, test_accuray_rc, epoch, writer, r
     acc = calc_acc(logits, labels)
     test_accuray_rc.append(acc)
     buf = "{:s} | Accuracy {:.2%}".format(name, acc)
-    writer.add_scalar('Test Accuracy', acc.item(), epoch)
+    writer.add_scalar('Test Accuracy', acc, global_step=time)
     if result_file_name is not None:
         with open(result_file_name, 'a+') as f:
-            f.write(buf + '\n')
+            f.write(str(epoch) + ' ' + str(acc) + ' ' + str(time) + '\n')
             print(buf)
     else:
         print(buf)
     return model, acc
 
 @torch.no_grad()
-def evaluate_trans(args, name, model, g, test_accuray_rc, epoch, writer, result_file_name=None):
+def evaluate_trans(args, name, model, g, test_accuray_rc, time, writer, epoch, result_file_name=None):
     model.eval()
     model.cpu()
     feat, labels = g.ndata['feat'], g.ndata['label']
@@ -314,10 +314,10 @@ def evaluate_trans(args, name, model, g, test_accuray_rc, epoch, writer, result_
     test_acc = calc_acc(test_logits, test_labels)
     test_accuray_rc.append(test_acc)
     buf = "{:s} | Validation Accuracy {:.2%} | Test Accuracy {:.2%}".format(name, val_acc, test_acc)
-    writer.add_scalar('Test Accuracy', test_acc.item(), epoch)
+    writer.add_scalar('Test Accuracy', test_acc, global_step=time)
     if result_file_name is not None:
         with open(result_file_name, 'a+') as f:
-            f.write(buf + '\n')
+            f.write(str(epoch) + ' ' + str(test_acc) + ' ' + str(time) + '\n')
             print(buf)
     else:
         print(buf)
@@ -368,14 +368,14 @@ def getNicName(args):
 def reocord_time(args, train_dur, comm_dur, reduce_dur, loss_rc, test_accuray_rc):
     result_file_name = 'results/%s.txt' % (args.dataset)
 
-    with open(result_file_name, 'a+') as f:
-        f.write("This is rank:{:03d}".format(args.rank) + '\n')
-        f.write("accuracy recod:" + str(test_accuray_rc) + '\n')
-        f.write("loss recod:" + str(loss_rc) + '\n')
-        f.write("train_dur:" + str((train_dur)) + '\n')
-        f.write("comm_dur:" + str((comm_dur)) + '\n')
-        f.write("reduce_dur:" + str((reduce_dur)) + '\n')
-        f.close()
+    # with open(result_file_name, 'a+') as f:
+    #     f.write("This is rank:{:03d}".format(args.rank) + '\n')
+    #     f.write("accuracy recod:" + str(test_accuray_rc) + '\n')
+    #     f.write("loss recod:" + str(loss_rc) + '\n')
+    #     f.write("train_dur:" + str((train_dur)) + '\n')
+    #     f.write("comm_dur:" + str((comm_dur)) + '\n')
+    #     f.write("reduce_dur:" + str((reduce_dur)) + '\n')
+    #     f.close()
     print("|---------------Train time--------------|")
     print(f'max cost:{max(train_dur)}s')
     print(f'min cost:{min(train_dur)}s')

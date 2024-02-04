@@ -13,6 +13,7 @@ import subprocess
 # %%   
 def main(args):
     print("start!\n")
+    t_recor_start = time.time()
     rank, world_size = dist.get_rank(), dist.get_world_size()
     # 关闭异常检测和性能分析信息
     torch.autograd.set_detect_anomaly(False)
@@ -69,7 +70,7 @@ def main(args):
     for i, (name, param) in enumerate(model.named_parameters()):
         param.register_hook(reduce_hook(param, name, n_train))
     best_model, best_acc = None, 0
-    result_file_name = 'results/%s.txt' % (args.dataset)
+    result_file_name = f'results/{args.dataset}_{args.use_es}_{args.sigma}_{args.use_sample}_{args.sample_rate}_{args.use_async}_{args.async_step}.txt'
     if args.dataset == 'yelp':
         loss_fcn = torch.nn.BCEWithLogitsLoss(reduction='sum')
     else:
@@ -113,6 +114,7 @@ def main(args):
 # %% training
     if not args.use_async:
         recv_comm, send_comm = [], []
+
     for epoch in range(args.n_epochs): 
         if not args.use_async:
             result_before = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
@@ -157,7 +159,7 @@ def main(args):
         comm_dur.append(ctx.comm_timer.tot_time()+commu_time)
         reduce_dur.append(reduce_time)
         if not args.use_async:
-            time.sleep(1)
+            # time.sleep(1)
             result_after = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
             rx_before = int(result_before.decode().split('bytes')[1].split('(')[0])
             tx_before = int(result_before.decode().split('bytes')[2].split('(')[0])
@@ -177,9 +179,9 @@ def main(args):
         if rank == 0 and args.eval and (epoch + 1) % args.log_every == 0:
             model_copy = copy.deepcopy(model)
             if not args.inductive:
-                eval_thread = eval_pool.apply_async(evaluate_trans, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, test_accuray_rc, epoch, writer, result_file_name))
+                eval_thread = eval_pool.apply_async(evaluate_trans, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, test_accuray_rc, time.time()-t_recor_start, writer, epoch, result_file_name))
             else:
-                eval_thread = eval_pool.apply_async(evaluate_induc, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, 'val', test_accuray_rc, epoch, writer, result_file_name))
+                eval_thread = eval_pool.apply_async(evaluate_induc, args=(args, 'Epoch %05d' % epoch, model_copy, val_g, 'val', test_accuray_rc, time.time()-t_recor_start, writer, epoch, result_file_name))
     if eval_thread:
         eval_thread.get()
     reocord_time(args, train_dur, comm_dur, reduce_dur, loss_rc, test_accuray_rc)
@@ -195,8 +197,8 @@ if __name__ == "__main__":
     parser.add_argument("--backend",type=str, default='gloo', help="enter the backend")
     parser.add_argument("--rank",type=int, default=0, help="rank of this process")
     parser.add_argument("--world_size","--world-size", type=int, default=4, help="world size of the group")
-    parser.add_argument("--master_addr",type=str, default='11.11.11.13', help="enter the backend")
-    parser.add_argument("--master_port",type=str, default='4321', help="enter the backend")
+    parser.add_argument("--master_addr",type=str, default='192.168.124.102', help="enter the backend")
+    parser.add_argument("--master_port",type=str, default='6668', help="enter the backend")
     parser.add_argument("--nic_name",type=str, default='', help="the nic name to communicate")
     parser.add_argument("--device",type=int, default=0, help="training device")
     #dataset
@@ -225,7 +227,7 @@ if __name__ == "__main__":
     parser.add_argument("--async-step", "--async_step", type=int, default=1, help="Number of rounds of asynchronous information used")
     # sample
     parser.add_argument("--use-sample", "--use_sample", action='store_true', help="Whether to use sample ")
-    parser.add_argument("--sample-rate", "--sample_rate", type=float, default=1 , help="Sample rate")
+    parser.add_argument("--sample-rate", "--sample_rate", type=float, default=0.1 , help="Sample rate")
     parser.add_argument("--sample-method", "--sample_method", choices=['random', ''], default='random', help="neighbor nodes' sample method cross partitions")
     # embedding sample
     parser.add_argument("--use-es", "--use_es", action='store_true', help="Whether to use embdding sampling")
