@@ -227,7 +227,7 @@ def create_model(layer_size, n_train, args):
     if args.model == 'graphsage':
         return GraphSAGE(layer_size, F.relu, norm=args.norm, dropout=args.dropout,
                          n_linear=args.n_linear, train_size=n_train,
-                         es=args.use_es, lam=args.lam, sigma=args.sigma)
+                         es=args.use_es, lam=args.lam, sigma=args.sigma, es_location=args.es_location)
     else:
         raise NotImplementedError
 
@@ -292,7 +292,8 @@ def evaluate_induc(args, name, model, g, mode, test_accuray_rc, time, writer, ep
     acc = calc_acc(logits, labels)
     test_accuray_rc.append(acc)
     buf = "{:s} | Accuracy {:.2%}".format(name, acc)
-    writer.add_scalar('Test Accuracy', acc, global_step=time)
+    writer.add_scalar('Test Accuracy vs time', acc, global_step=time)
+    writer.add_scalar('Test Accuracy vs epoch', acc, epoch)
     if result_file_name is not None:
         with open(result_file_name, 'a+') as f:
             f.write(str(epoch) + ' ' + str(acc) + ' ' + str(time) + '\n')
@@ -314,7 +315,8 @@ def evaluate_trans(args, name, model, g, test_accuray_rc, time, writer, epoch, r
     test_acc = calc_acc(test_logits, test_labels)
     test_accuray_rc.append(test_acc)
     buf = "{:s} | Validation Accuracy {:.2%} | Test Accuracy {:.2%}".format(name, val_acc, test_acc)
-    writer.add_scalar('Test Accuracy', test_acc, global_step=time)
+    writer.add_scalar('Test Accuracy vs time', test_acc, global_step=time)
+    writer.add_scalar('Test Accuracy vs epoch', test_acc, epoch)
     if result_file_name is not None:
         with open(result_file_name, 'a+') as f:
             f.write(str(epoch) + ' ' + str(test_acc) + ' ' + str(time) + '\n')

@@ -1,7 +1,7 @@
 import torch
 from multiprocessing.pool import ThreadPool
 from helper.timer.timer import *
-from helper.Buff_unit_async_embed_node import *
+from helper.Buff_unit_async_concat import *
 import queue
 import numpy as np
 import dgl.function as fn
@@ -134,9 +134,11 @@ class Buffer(object):
             if i != rank:
                 # 将embed_recv置0,相当于将embedding中没有选中的维度置0
                 # change 2.1 -
-                # zero_tensor = torch.zeros(torch.Size([self._buff[step].get_recv_idx()[i].shape[0], self._embed_recv[layer][i].shape[1]]), device='cuda')
-                # self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]] = zero_tensor
-                self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]][:, self._buff[step].get_recv_embed_idx(layer)[i]] = self._buff[step].get_f_recv_gpu(layer)[i]
+                zero_tensor = torch.zeros(torch.Size([self._buff[step].get_recv_idx()[i].shape[0], self._embed_recv[layer][i].shape[1]]), device='cuda')
+                self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]] = zero_tensor
+                selected_recv_embed_idx = self._buff[step].get_f_recv_gpu(layer)[i][-1]
+                selected_recv_embed_idx = torch.tensor(selected_recv_embed_idx, dtype=torch.int64)
+                self._embed_recv[layer][i][self._buff[step].get_recv_idx()[i]][:, selected_recv_embed_idx] = self._buff[step].get_f_recv_gpu(layer)[i][:-1]
                 # add 2.1 + 
                 
     def __feat_concat(self, layer, feat):
@@ -178,7 +180,7 @@ class Buffer(object):
     # change 2.1 -
     def __gloo_all_to_all(self, send_gpu, recv_gpu, send_cpu, recv_cpu,
                         selected_send_idx, selected_recv_idx, 
-                        selected_send_embed_idx, selected_recv_embed_idx, step, tag, forward = True):
+                        step, tag, layer, forward = True):
     # change 2.1 + 
         rank, size = dist.get_rank(), dist.get_world_size()
         req1, req2 = [], queue.Queue()
@@ -193,7 +195,17 @@ class Buffer(object):
                 if forward:
                     # 前向传播传boundary中的send_idx部分
                     # change 2.1 - 
-                    send_cpu[right].copy_(send_gpu[self._boundary[right]][selected_send_idx[right]][:, selected_send_embed_idx[right]])
+                    mask = send_gpu[-1]
+                    if layer == 0:
+                        selected_send_embed_idx = torch.nonzero(mask, as_tuple=True)[0]
+                    else:
+                        _, sorted_indices = torch.sort(mask, descending=True)
+                        # selected_send_embed_idx = torch.nonzero(mask, as_tuple=True)[0]
+                        selected_send_embed_idx = sorted_indices[:int(1*send_gpu.shape[1])]
+                    tmp = [send_gpu[self._boundary[right]][selected_send_idx[right]][:, selected_send_embed_idx]]
+                    selected_send_embed_idx = torch.unsqueeze(selected_send_embed_idx, 0)
+                    tmp.append(selected_send_embed_idx)
+                    send_cpu[right].copy_(torch.cat(tmp))
                     # change 2.1 + 
                 else:
                     # 反向传播传recv_idx部分
@@ -220,13 +232,16 @@ class Buffer(object):
         if self.es:
             self._buff[step].setEmbedInfo(mask, layer)
         tag = TransferTag.FEAT_BEGIN + epoch * 2 * self._n_layers + layer
+        tmp = [feat]
+        mask = torch.unsqueeze(mask, 0)
+        tmp.append(mask.to('cuda:0'))
         if self._backend == 'gloo':
             with torch.no_grad():
                 # send_gpu, recv_gpu, send_cpu, recv_cpu
                 # change 2.1 -
-                self.__gloo_all_to_all(feat, self._buff[step].get_f_recv_gpu(layer), self._buff[step].get_f_send_cpu(layer), self._buff[step].get_f_recv_cpu(layer),
+                self.__gloo_all_to_all(torch.cat(tmp), self._buff[step].get_f_recv_gpu(layer), self._buff[step].get_f_send_cpu(layer), self._buff[step].get_f_recv_cpu(layer),
                                     self._buff[step].get_send_idx(), self._buff[step].get_recv_idx(), 
-                                    self._buff[step].get_send_embed_idx(layer), self._buff[step].get_recv_embed_idx(layer), step, tag, forward=True)
+                                    step, tag, layer, forward=True)
                 # change 2.1 + 
             self._buff[step].get_f_cuda_event(layer).record(self._comm_stream[step]) # 在通信流上记录CUDA事件，以便后续等待
         else:
@@ -280,7 +295,7 @@ class Buffer(object):
         if self._backend == 'gloo':
             # change 2.1 - 
             self.__gloo_all_to_all(grad, self._buff[step].get_g_recv_gpu(layer), self._buff[step].get_g_send_cpu(layer), self._buff[step].get_g_recv_cpu(layer),
-                                   self._buff[step].get_send_idx(), self._buff[step].get_recv_idx(), None, None, step, tag, forward=False)
+                                   self._buff[step].get_send_idx(), self._buff[step].get_recv_idx(), step, tag, layer, forward=False)
             self._buff[step].get_b_cuda_event(layer).record(self._comm_stream[step])
             # change 2.1 + 
         else:
