@@ -70,7 +70,7 @@ def main(args):
     for i, (name, param) in enumerate(model.named_parameters()):
         param.register_hook(reduce_hook(param, name, n_train))
     best_model, best_acc = None, 0
-    result_file_name = f'results/{args.dataset}_{args.use_es}_{args.sigma}_{args.use_sample}_{args.sample_rate}_{args.use_async}_{args.async_step}.txt'
+    result_file_name = f'results/{args.dataset}_{args.use_es}_{args.sigma}_{args.embed_rate}_{args.use_sample}_{args.sample_rate}_{args.use_async}_{args.async_step}.txt'
     if args.dataset == 'yelp':
         loss_fcn = torch.nn.BCEWithLogitsLoss(reduction='sum')
     else:
@@ -102,7 +102,7 @@ def main(args):
     # add 2.1 +     
 
     if rank == 0:
-        writer = SummaryWriter(f'logs/{args.dataset}_{args.use_es}_{args.sigma}_{args.lam}_{args.use_sample}_{args.sample_rate}_{args.use_async}_{args.async_step}_logs')
+        writer = SummaryWriter(f'logs/{args.dataset}_{args.use_es}_{args.sigma}_{args.embed_rate}_{args.use_sample}_{args.sample_rate}_{args.use_async}_{args.async_step}_logs')
     command = f"ifconfig enp5s0f1"
 
     del node_dict
@@ -112,12 +112,12 @@ def main(args):
     #     with open(result_file_name, 'a+') as f:
     #         f.write(str(args) + '\n')
 # %% training
-    if not args.use_async:
-        recv_comm, send_comm = [], []
+    # if not args.use_async:
+    #     recv_comm, send_comm = [], []
 
     for epoch in range(args.n_epochs): 
-        if not args.use_async:
-            result_before = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
+        # if not args.use_async:
+        #     result_before = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
         print(f"Epoch:{epoch}")
         t0 = time.time()
         # add at 7.24 在这个地方可以异步以model异步单位
@@ -158,17 +158,17 @@ def main(args):
         train_dur.append(time.time() - t0)
         comm_dur.append(ctx.comm_timer.tot_time()+commu_time)
         reduce_dur.append(reduce_time)
-        if not args.use_async:
-            # time.sleep(1)
-            result_after = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
-            rx_before = int(result_before.decode().split('bytes')[1].split('(')[0])
-            tx_before = int(result_before.decode().split('bytes')[2].split('(')[0])
-            rx_after = int(result_after.decode().split('bytes')[1].split('(')[0])
-            tx_after = int(result_after.decode().split('bytes')[2].split('(')[0])
-            rx_diff = rx_after - rx_before
-            tx_diff = tx_after - tx_before
-            recv_comm.append(rx_diff)
-            send_comm.append(tx_diff)
+        # if not args.use_async:
+        #     # time.sleep(1)
+        #     result_after = subprocess.Popen(command, shell=True, stdout=subprocess.PIPE).communicate()[0]
+        #     rx_before = int(result_before.decode().split('bytes')[1].split('(')[0])
+        #     tx_before = int(result_before.decode().split('bytes')[2].split('(')[0])
+        #     rx_after = int(result_after.decode().split('bytes')[1].split('(')[0])
+        #     tx_after = int(result_after.decode().split('bytes')[2].split('(')[0])
+        #     rx_diff = rx_after - rx_before
+        #     tx_diff = tx_after - tx_before
+        #     recv_comm.append(rx_diff)
+        #     send_comm.append(tx_diff)
         if (epoch + 1) % 10 == 0:
             print("Process {:03d} | Epoch {:05d} | Time(s) {:.4f} | Comm(s) {:.4f} | Reduce(s) {:.4f} | Loss {:.4f}".format(
                   rank, epoch, np.average(train_dur[-10:]), np.average(comm_dur[-10:]), np.average(reduce_dur[-10:]), loss.item() / part_train) )
@@ -185,8 +185,8 @@ def main(args):
     if eval_thread:
         eval_thread.get()
     reocord_time(args, train_dur, comm_dur, reduce_dur, loss_rc, test_accuray_rc)
-    if not args.use_async:
-        print("recv_mean:", int(sum(recv_comm)/len(recv_comm)), "send_mean:", int(sum(send_comm)/len(send_comm)))
+    # if not args.use_async:
+    #     print("recv_mean:", int(sum(recv_comm)/len(recv_comm)), "send_mean:", int(sum(send_comm)/len(send_comm)))
     # if args.inductive:
     #     evaluate_induc('Final Test Result', model, test_g, 'test')
     print("finish!\n")
@@ -231,8 +231,10 @@ if __name__ == "__main__":
     parser.add_argument("--sample-method", "--sample_method", choices=['random', ''], default='random', help="neighbor nodes' sample method cross partitions")
     # embedding sample
     parser.add_argument("--use-es", "--use_es", action='store_true', help="Whether to use embdding sampling")
+    parser.add_argument("--es-loacation", "--es_location", type=str, default=",0", help="In which layers add ES layer")
     parser.add_argument("--lam", type=float, default=0.1, help="The weighting factor for the regularization")
     parser.add_argument("--sigma", type=float, default=0.5, help="Standard deviation in the Gaussian distribution")
+    parser.add_argument("--embed-rate", "--embed_rate", type=float, default=1, help="embedding sample rate")
     args = parser.parse_args()
     # Initialize the distributed environment
     os.environ['MASTER_ADDR'] = args.master_addr #rank = 0 的process所在的machine的ip

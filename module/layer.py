@@ -95,7 +95,7 @@ class EmbeddingSelector(nn.Module):
         # self.device = device
     
     def forward(self, prev_x):
-        z = self.mu + self.sigma*self.noise.normal_()*self.training 
+        z = self.mu + self.sigma*self.noise.normal_()*self.training
         stochastic_gate = self.hard_sigmoid(z)
         new_x = prev_x * stochastic_gate
         return new_x, stochastic_gate
